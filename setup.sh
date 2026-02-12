@@ -491,4 +491,18 @@ set -a
 source "$ENV_FILE"
 set +a
 
+# Kill any existing process on port 4141
+PORT=4141
+EXISTING_PID=$(lsof -ti:$PORT 2>/dev/null)
+if [ -n "$EXISTING_PID" ]; then
+    warn "Killing existing process on port $PORT (PID: $EXISTING_PID)"
+    kill "$EXISTING_PID" 2>/dev/null
+    sleep 1
+    # Force kill if still running
+    if kill -0 "$EXISTING_PID" 2>/dev/null; then
+        kill -9 "$EXISTING_PID" 2>/dev/null
+    fi
+    ok "Port $PORT cleared"
+fi
+
 exec litellm --config "$CONFIG_FILE" --port 4141
