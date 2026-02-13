@@ -15,7 +15,7 @@
 #   5. Prompts for API keys and writes a .env file
 #   6. Starts the proxy on port 4141
 # =============================================================================
-set -euo pipefail
+#set -euo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
