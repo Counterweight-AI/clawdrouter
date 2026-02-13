@@ -505,4 +505,4 @@ if [ -n "$EXISTING_PID" ]; then
     ok "Port $PORT cleared"
 fi
 
-exec litellm --config "$CONFIG_FILE" --port 4141
+exec ./.venv/bin/litellm --config "$CONFIG_FILE" --port 4141
