@@ -50,6 +50,18 @@ sedi() {
     fi
 }
 
+# ---------- 0. Validate required environment variables ----------------------
+MISSING=""
+[ -z "${GOOGLE_API_KEY:-}" ]        && MISSING="$MISSING GOOGLE_API_KEY"
+[ -z "${AWS_ACCESS_KEY_ID:-}" ]     && MISSING="$MISSING AWS_ACCESS_KEY_ID"
+[ -z "${AWS_SECRET_ACCESS_KEY:-}" ] && MISSING="$MISSING AWS_SECRET_ACCESS_KEY"
+[ -z "${AWS_REGION_NAME:-}" ]       && MISSING="$MISSING AWS_REGION_NAME"
+[ -z "${BEDROCK_API_KEY:-}" ]       && MISSING="$MISSING BEDROCK_API_KEY"
+if [ -n "$MISSING" ]; then
+    echo "ERROR: Missing required environment variables:$MISSING"
+    exit 1
+fi
+
 # ---------- 1. Python check -------------------------------------------------
 
 echo ""
