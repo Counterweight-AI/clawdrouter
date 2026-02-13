@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ClawRouter is a smart model routing system built on top of LiteLLM. It routes requests to different tier models (low/mid/top) based on prompt content classification, helping users maximize their existing model access and credits by using expensive models only when needed.
 
+## Key Handover Notes
+To configure the "model-routing Proxy", note:
+- Routing config is in -> `routing_rules.yaml`
+  - (ie, which models go to which tier)
+- Supported models -> go in `proxy_config.yaml` 
+  - (ie, which are supported by LiteLLM itself)
+
 ### Quick Start
 ```bash
 ./setup.sh          # One-command setup: installs deps, prompts for API keys, configures tiers, starts proxy
