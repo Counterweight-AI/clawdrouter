@@ -195,60 +195,12 @@ else
     ok ".env already exists — using existing file"
 fi
 
-# ---------- 5b. Suggest auto-router tier models ------------------------------
-
-# Collect providers that have keys
-AVAILABLE=""
-[ -n "$GOOGLE_KEY" ]    && AVAILABLE="$AVAILABLE google"
-[ -n "$OPENAI_KEY" ]    && AVAILABLE="$AVAILABLE openai"
-[ -n "$ANTHROPIC_KEY" ] && AVAILABLE="$AVAILABLE anthropic"
-[ -n "$DEEPSEEK_KEY" ]  && AVAILABLE="$AVAILABLE deepseek"
-[ -n "$MOONSHOT_KEY" ]  && AVAILABLE="$AVAILABLE moonshot"
-[ -n "$ZAI_KEY" ]       && AVAILABLE="$AVAILABLE zai"
-[ -n "$XAI_KEY" ]       && AVAILABLE="$AVAILABLE xai"
-[ -n "$MINIMAX_KEY" ]   && AVAILABLE="$AVAILABLE minimax"
-
-# Pick best available model per tier from models.yaml
-eval "$(MODELS_FILE="$MODELS_FILE" AVAILABLE="$AVAILABLE" python << 'PYEOF'
-import yaml, os
-providers = set(os.environ.get("AVAILABLE", "").split())
-with open(os.environ["MODELS_FILE"]) as f:
-    cfg = yaml.safe_load(f)
-for tier in ["low", "mid", "top"]:
-    found = False
-    for c in cfg["tier_candidates"].get(tier, []):
-        if c["provider"] in providers:
-            m, d, cost = c["model"], c["display"], c["cost"]
-            safe_cost = cost.replace("$", "\\$")
-            print(f'{tier.upper()}_MODEL="{m}"')
-            print(f'{tier.upper()}_DISPLAY="{d} ({safe_cost})"')
-            found = True
-            break
-    if not found:
-        print(f'{tier.upper()}_MODEL=""')
-        print(f'{tier.upper()}_DISPLAY=""')
-PYEOF
-)"
-
-if [ -n "$LOW_MODEL" ] || [ -n "$MID_MODEL" ] || [ -n "$TOP_MODEL" ]; then
-    echo ""
-    echo -e "${BOLD}Auto-Router Tier Suggestions${NC}  (based on your API keys)"
-    echo ""
-    [ -n "$LOW_MODEL" ]  && echo -e "  low : ${GREEN}$LOW_DISPLAY${NC}  ->  $LOW_MODEL"
-    [ -n "$MID_MODEL" ]  && echo -e "  mid : ${YELLOW}$MID_DISPLAY${NC}  ->  $MID_MODEL"
-    [ -n "$TOP_MODEL" ]  && echo -e "  top : ${CYAN}$TOP_DISPLAY${NC}  ->  $TOP_MODEL"
-    echo ""
-    #read -rp "  Apply these to routing_rules.yaml? [Y/n] " APPLY_TIERS
-    APPLY_TIERS='y'
-    if [ -z "$APPLY_TIERS" ] || [[ "$APPLY_TIERS" =~ ^[Yy] ]]; then
-        [ -n "$LOW_MODEL" ] && sedi "/^  low:/,/^  [a-z]/{s|model:.*|model: \"$LOW_MODEL\"|;}" "$ROUTING_RULES"
-        [ -n "$MID_MODEL" ] && sedi "/^  mid:/,/^  [a-z]/{s|model:.*|model: \"$MID_MODEL\"|;}" "$ROUTING_RULES"
-        [ -n "$TOP_MODEL" ] && sedi "/^  top:/,/^[a-z]/{s|model:.*|model: \"$TOP_MODEL\"|;}" "$ROUTING_RULES"
-        ok "Updated routing_rules.yaml with tier models"
-    else
-        info "Skipped — you can edit routing_rules.yaml manually later"
-    fi
-fi
+# ---------- 5b. Set auto-router tier models ---------------------------------
+info "Setting tier models in routing_rules.yaml..."
+sedi '/^  low:/,/^  [a-z]/{s|model:.*|model: "gemini/gemini-3-flash-preview"|;}' "$ROUTING_RULES"
+sedi '/^  mid:/,/^  [a-z]/{s|model:.*|model: "gemini/gemini-3-pro-preview"|;}' "$ROUTING_RULES"
+sedi '/^  top:/,/^[a-z]/{s|model:.*|model: "bedrock/us.anthropic.claude-opus-4-6-v1"|;}' "$ROUTING_RULES"
+ok "Tier models: low=gemini-3-flash, mid=gemini-3-pro, top=opus-4-6"
 
 # ---------- 5c. Add provider models to proxy_config.yaml --------------------
 
