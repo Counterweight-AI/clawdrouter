@@ -56,7 +56,6 @@ MISSING=""
 [ -z "${AWS_ACCESS_KEY_ID:-}" ]     && MISSING="$MISSING AWS_ACCESS_KEY_ID"
 [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] && MISSING="$MISSING AWS_SECRET_ACCESS_KEY"
 [ -z "${AWS_REGION_NAME:-}" ]       && MISSING="$MISSING AWS_REGION_NAME"
-[ -z "${BEDROCK_API_KEY:-}" ]       && MISSING="$MISSING BEDROCK_API_KEY"
 if [ -n "$MISSING" ]; then
     echo "ERROR: Missing required environment variables:$MISSING"
     exit 1
@@ -188,7 +187,6 @@ GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
 AWS_REGION_NAME=${AWS_REGION_NAME:-}
-BEDROCK_API_KEY=${BEDROCK_API_KEY:-}
 EOF
     ok "Created .env from environment variables"
 else
