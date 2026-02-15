@@ -25,6 +25,10 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "$REPO_ROOT" ]; then
+    echo -e "${RED}[FAIL]${NC}  Failed to determine repository root directory" && exit 1
+fi
+
 CONFIG_FILE="$REPO_ROOT/litellm/proxy/proxy_config.yaml"
 ROUTING_RULES="$REPO_ROOT/litellm/router_strategy/auto_router/routing_rules.yaml"
 VENV_DIR="$REPO_ROOT/.venv"
@@ -43,11 +47,18 @@ fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
 
 # Cross-platform sed -i (GNU vs BSD/macOS)
 sedi() {
-    if sed --version &>/dev/null 2>&1; then
+    local result
+    if sed --version >/dev/null 2>&1; then
         sed -i "$@"
+        result=$?
     else
         sed -i '' "$@"
+        result=$?
     fi
+    if [ $result -ne 0 ]; then
+        echo -e "${RED}[FAIL]${NC}  sed operation failed on: ${*: -1}" && exit 1
+    fi
+    return 0
 }
 
 # ---------- 0. Validate required environment variables ----------------------
@@ -57,8 +68,15 @@ MISSING=""
 [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] && MISSING="$MISSING AWS_SECRET_ACCESS_KEY"
 [ -z "${AWS_REGION_NAME:-}" ]       && MISSING="$MISSING AWS_REGION_NAME"
 if [ -n "$MISSING" ]; then
-    echo "ERROR: Missing required environment variables:$MISSING"
-    exit 1
+    fail "Missing required environment variables:$MISSING
+
+  Set these environment variables before running setup.sh:
+    export GOOGLE_API_KEY='your-key-here'
+    export AWS_ACCESS_KEY_ID='your-key-here'
+    export AWS_SECRET_ACCESS_KEY='your-secret-here'
+    export AWS_REGION_NAME='us-east-1'
+
+  Then re-run: ./setup.sh"
 fi
 
 # ---------- 1. Python check -------------------------------------------------
@@ -79,9 +97,17 @@ for candidate in \
     /usr/local/bin/python3 \
     "$HOME/.pyenv/shims/python3" \
     python3 python; do
-    if command -v "$candidate" &>/dev/null; then
-        PY_MAJOR=$("$candidate" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo 0)
-        PY_MINOR=$("$candidate" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)
+    if command -v "$candidate" >/dev/null 2>&1; then
+        PY_MAJOR=$("$candidate" -c 'import sys; print(sys.version_info.major)' 2>&1)
+        if [ $? -ne 0 ]; then
+            warn "Failed to get version from $candidate, skipping..."
+            continue
+        fi
+        PY_MINOR=$("$candidate" -c 'import sys; print(sys.version_info.minor)' 2>&1)
+        if [ $? -ne 0 ]; then
+            warn "Failed to get minor version from $candidate, skipping..."
+            continue
+        fi
         if [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -ge "$MIN_PY_MINOR" ] && [ "$PY_MINOR" -le "$MAX_PY_MINOR" ]; then
             PYTHON="$candidate"
             break
@@ -104,7 +130,10 @@ if [ -z "$PYTHON" ]; then
   Then re-run: ./setup.sh"
 fi
 
-PY_VERSION=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')
+PY_VERSION=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")' 2>&1)
+if [ $? -ne 0 ]; then
+    fail "Failed to get Python version from $PYTHON. Error: $PY_VERSION"
+fi
 ok "Found $PYTHON ($PY_VERSION)"
 
 # ---------- 2. Virtual environment ------------------------------------------
@@ -113,6 +142,15 @@ info "Setting up virtual environment..."
 
 if [ ! -d "$VENV_DIR" ]; then
     "$PYTHON" -m venv "$VENV_DIR"
+    if [ $? -ne 0 ]; then
+        fail "Failed to create virtual environment at $VENV_DIR
+
+  Try installing python venv module:
+    Ubuntu/Debian: sudo apt install python3-venv
+    Fedora/RHEL:   sudo dnf install python3-venv
+
+  Then re-run: ./setup.sh"
+    fi
     ok "Created virtual environment at .venv/"
 else
     ok "Virtual environment already exists at .venv/"
@@ -121,20 +159,39 @@ fi
 # Activate
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
+if [ $? -ne 0 ]; then
+    fail "Failed to activate virtual environment at $VENV_DIR/bin/activate"
+fi
 
 # Bootstrap pip if missing (Debian/Ubuntu without python3.XX-venv package)
 if ! python -c "import pip" 2>/dev/null; then
     warn "pip not found in venv — bootstrapping via get-pip.py"
     GET_PIP_URL="https://bootstrap.pypa.io/get-pip.py"
     GET_PIP_PATH="$VENV_DIR/get-pip.py"
-    if command -v curl &>/dev/null; then
-        curl -sSL "$GET_PIP_URL" -o "$GET_PIP_PATH" || fail "Failed to download get-pip.py"
-    elif command -v wget &>/dev/null; then
-        wget -q "$GET_PIP_URL" -O "$GET_PIP_PATH" || fail "Failed to download get-pip.py"
+    if command -v curl >/dev/null 2>&1; then
+        curl -sSL "$GET_PIP_URL" -o "$GET_PIP_PATH"
+        if [ $? -ne 0 ]; then
+            fail "Failed to download get-pip.py from $GET_PIP_URL using curl"
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$GET_PIP_URL" -O "$GET_PIP_PATH"
+        if [ $? -ne 0 ]; then
+            fail "Failed to download get-pip.py from $GET_PIP_URL using wget"
+        fi
     else
-        fail "Neither curl nor wget found — cannot bootstrap pip"
+        fail "Neither curl nor wget found — cannot bootstrap pip
+
+  Install curl or wget:
+    Ubuntu/Debian: sudo apt install curl
+    Fedora/RHEL:   sudo dnf install curl
+    macOS:         curl is pre-installed
+
+  Then re-run: ./setup.sh"
     fi
-    python "$GET_PIP_PATH" --quiet || fail "get-pip.py failed"
+    python "$GET_PIP_PATH"
+    if [ $? -ne 0 ]; then
+        fail "get-pip.py execution failed. Check the output above for errors."
+    fi
     rm -f "$GET_PIP_PATH"
     ok "Bootstrapped pip via get-pip.py"
 fi
@@ -143,16 +200,32 @@ fi
 
 info "Upgrading pip..."
 python -m pip install --upgrade pip --quiet
-
-info "Installing LiteLLM with proxy extras (this may take a minute)..."
-python -m pip install -e "$REPO_ROOT[proxy]" 2>&1 | tail -5
-
-# Verify the install
-if ! command -v litellm &>/dev/null; then
-    fail "litellm CLI not found after install. Check the output above for errors."
+if [ $? -ne 0 ]; then
+    fail "Failed to upgrade pip. Check your network connection and try again."
 fi
 
-LITELLM_VERSION=$(python -c 'from importlib.metadata import version; print(version("litellm"))' 2>/dev/null || echo "unknown")
+info "Installing LiteLLM with proxy extras (this may take a minute)..."
+INSTALL_OUTPUT=$(python -m pip install -e "$REPO_ROOT[proxy]" 2>&1)
+INSTALL_RESULT=$?
+if [ $INSTALL_RESULT -ne 0 ]; then
+    echo "$INSTALL_OUTPUT" | tail -20
+    fail "Failed to install LiteLLM with proxy extras. Check the output above for errors."
+fi
+echo "$INSTALL_OUTPUT" | tail -5
+
+# Verify the install
+if ! command -v litellm >/dev/null 2>&1; then
+    fail "litellm CLI not found after install. Check the output above for errors.
+
+  The installation completed but the litellm command is not available.
+  This may indicate an issue with the virtual environment or PATH."
+fi
+
+LITELLM_VERSION=$(python -c 'from importlib.metadata import version; print(version("litellm"))' 2>&1)
+if [ $? -ne 0 ]; then
+    warn "Could not determine litellm version, but installation appears successful"
+    LITELLM_VERSION="unknown"
+fi
 ok "Installed litellm $LITELLM_VERSION"
 
 # ---------- 4. Patch proxy config -------------------------------------------
@@ -168,14 +241,23 @@ if [ ! -f "$ROUTING_RULES" ]; then
 fi
 
 # Fix the auto_router_config_path to point to this clone's absolute path
+info "Updating auto_router_config_path in proxy config..."
 sedi "s|auto_router_config_path:.*|auto_router_config_path: \"$ROUTING_RULES\"|" "$CONFIG_FILE"
+if ! grep -q "auto_router_config_path: \"$ROUTING_RULES\"" "$CONFIG_FILE"; then
+    fail "Failed to update auto_router_config_path in $CONFIG_FILE
+
+  Expected pattern not found after sed replacement.
+  Manual fix required: set auto_router_config_path to $ROUTING_RULES"
+fi
 ok "Updated auto_router_config_path -> $ROUTING_RULES"
 
 # Disable mcp_semantic_tool_filter (requires optional semantic-router package)
+info "Disabling mcp_semantic_tool_filter..."
 sedi "s|enabled: true|enabled: false|" "$CONFIG_FILE"
 ok "Disabled mcp_semantic_tool_filter (enable after: pip install 'litellm[semantic-router]')"
 
 # ---------- 5. API keys (.env) ----------------------------------------------
+info "Setting up environment file..."
 GOOGLE_KEY="${GOOGLE_API_KEY:-}"
 OPENAI_KEY="" ANTHROPIC_KEY=""
 DEEPSEEK_KEY="" MOONSHOT_KEY="" ZAI_KEY="" XAI_KEY="" MINIMAX_KEY=""
@@ -188,6 +270,11 @@ AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
 AWS_REGION_NAME=${AWS_REGION_NAME:-}
 EOF
+    if [ $? -ne 0 ]; then
+        fail "Failed to create .env file at $ENV_FILE
+
+  Check write permissions for the directory."
+    fi
     ok "Created .env from environment variables"
 else
     ok ".env already exists — using existing file"
@@ -198,12 +285,29 @@ info "Setting tier models in routing_rules.yaml..."
 sedi '/^  low:/,/^  [a-z]/{s|model:.*|model: "gemini/gemini-3-flash-preview"|;}' "$ROUTING_RULES"
 sedi '/^  mid:/,/^  [a-z]/{s|model:.*|model: "gemini/gemini-3-pro-preview"|;}' "$ROUTING_RULES"
 sedi '/^  top:/,/^[a-z]/{s|model:.*|model: "bedrock/us.anthropic.claude-opus-4-6-v1"|;}' "$ROUTING_RULES"
+
+# Verify tier models were set correctly
+if ! grep -q 'model: "gemini/gemini-3-flash-preview"' "$ROUTING_RULES"; then
+    warn "Failed to set low tier model in routing_rules.yaml"
+fi
+if ! grep -q 'model: "gemini/gemini-3-pro-preview"' "$ROUTING_RULES"; then
+    warn "Failed to set mid tier model in routing_rules.yaml"
+fi
+if ! grep -q 'model: "bedrock/us.anthropic.claude-opus-4-6-v1"' "$ROUTING_RULES"; then
+    warn "Failed to set top tier model in routing_rules.yaml"
+fi
 ok "Tier models: low=gemini-3-flash, mid=gemini-3-pro, top=opus-4-6"
 
 # ---------- 5c. Add provider models to proxy_config.yaml --------------------
+info "Preparing provider model entries..."
 
 # Collect model entries to add, then insert them all at once before "auto".
 _NEW_MODELS_FILE=$(mktemp)
+if [ $? -ne 0 ] || [ -z "$_NEW_MODELS_FILE" ]; then
+    fail "Failed to create temporary file for model entries
+
+  Check that /tmp is writable and has sufficient space."
+fi
 trap 'rm -f "$_NEW_MODELS_FILE"' EXIT
 
 # Queue a model entry (written to temp file, inserted later in one pass).
@@ -220,21 +324,38 @@ add_model() {
       model: $model_id
       api_key: os.environ/$api_key_env
 ENTRY
+    if [ $? -ne 0 ]; then
+        warn "Failed to write model entry for $model_name to temporary file"
+        return 1
+    fi
     return 0
 }
 
 # Read provider models from models.yaml and queue entries for available providers
-_PROVIDER_MODELS=$(MODELS_FILE="$MODELS_FILE" AVAILABLE="$AVAILABLE" python << 'PYEOF'
-import yaml, os
-providers = set(os.environ.get("AVAILABLE", "").split())
-with open(os.environ["MODELS_FILE"]) as f:
-    cfg = yaml.safe_load(f)
-for name, info in cfg["provider_models"].items():
-    if name in providers:
-        for m in info["models"]:
-            print(f'{m["name"]}|{m["id"]}|{info["key_env"]}')
+if [ ! -f "$MODELS_FILE" ]; then
+    warn "models.yaml not found at $MODELS_FILE, skipping provider model registration"
+    _PROVIDER_MODELS=""
+else
+    _PROVIDER_MODELS=$(MODELS_FILE="$MODELS_FILE" AVAILABLE="$AVAILABLE" python << 'PYEOF'
+import yaml, os, sys
+try:
+    providers = set(os.environ.get("AVAILABLE", "").split())
+    with open(os.environ["MODELS_FILE"]) as f:
+        cfg = yaml.safe_load(f)
+    for name, info in cfg.get("provider_models", {}).items():
+        if name in providers:
+            for m in info["models"]:
+                print(f'{m["name"]}|{m["id"]}|{info["key_env"]}')
+except Exception as e:
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
 PYEOF
 )
+    if [ $? -ne 0 ]; then
+        warn "Failed to parse models.yaml, skipping provider model registration. Error output above."
+        _PROVIDER_MODELS=""
+    fi
+fi
 
 if [ -n "$_PROVIDER_MODELS" ]; then
     while IFS='|' read -r _mname _mid _mkey; do
@@ -244,6 +365,7 @@ fi
 
 # Flush queued models into proxy_config.yaml
 if [ -s "$_NEW_MODELS_FILE" ]; then
+    info "Adding queued models to proxy_config.yaml..."
     # Convert empty YAML list to block-style so we can append entries
     if grep -q 'model_list: \[\]' "$CONFIG_FILE"; then
         sedi 's/model_list: \[\]/model_list:/' "$CONFIG_FILE"
@@ -257,7 +379,14 @@ if [ -s "$_NEW_MODELS_FILE" ]; then
                 close(newfile)
             }
             { print }
-        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+        if [ $? -ne 0 ]; then
+            fail "Failed to insert model entries into proxy_config.yaml using awk"
+        fi
+        mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+        if [ $? -ne 0 ]; then
+            fail "Failed to move temporary config file to $CONFIG_FILE"
+        fi
     else
         # No auto entry — append after "model_list:" line
         awk -v newfile="$_NEW_MODELS_FILE" '
@@ -268,7 +397,14 @@ if [ -s "$_NEW_MODELS_FILE" ]; then
                 next
             }
             { print }
-        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+        if [ $? -ne 0 ]; then
+            fail "Failed to append model entries to proxy_config.yaml using awk"
+        fi
+        mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+        if [ $? -ne 0 ]; then
+            fail "Failed to move temporary config file to $CONFIG_FILE"
+        fi
     fi
     ok "Added model(s) to proxy_config.yaml for configured providers"
 else
@@ -278,6 +414,7 @@ rm -f "$_NEW_MODELS_FILE"
 
 # Ensure the "auto" model entry exists (uses the auto-router)
 if ! grep -q 'model_name: auto' "$CONFIG_FILE"; then
+    info "Adding auto-router entry to proxy_config.yaml..."
     # Pick a default model: use the mid tier if set, otherwise first available provider model
     AUTO_DEFAULT="${MID_MODEL:-${LOW_MODEL:-${TOP_MODEL:-}}}"
     if [ -z "$AUTO_DEFAULT" ] && [ -n "$_PROVIDER_MODELS" ]; then
@@ -303,7 +440,14 @@ if ! grep -q 'model_name: auto' "$CONFIG_FILE"; then
             in_models=0
         }
         { print }
-    ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
+    if [ $? -ne 0 ]; then
+        fail "Failed to generate auto-router entry using awk"
+    fi
+    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    if [ $? -ne 0 ]; then
+        fail "Failed to move temporary config file to $CONFIG_FILE"
+    fi
     ok "Added auto-router entry to proxy_config.yaml (default: $AUTO_DEFAULT)"
 fi
 
@@ -313,54 +457,63 @@ OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
 
 if [ -f "$OPENCLAW_CONFIG" ]; then
     info "Registering litellm provider in OpenClaw config..."
-    python << 'PYEOF'
-import json, os
+    OPENCLAW_RESULT=$(python << 'PYEOF'
+import json, os, sys
 
-config_path = os.path.expanduser("~/.openclaw/openclaw.json")
-with open(config_path) as f:
-    config = json.load(f)
+try:
+    config_path = os.path.expanduser("~/.openclaw/openclaw.json")
+    with open(config_path) as f:
+        config = json.load(f)
 
-# Ensure models.providers path exists
-config.setdefault("models", {})
-config["models"].setdefault("providers", {})
+    # Ensure models.providers path exists
+    config.setdefault("models", {})
+    config["models"].setdefault("providers", {})
 
-config["models"]["providers"]["litellm"] = {
-    "baseUrl": "http://127.0.0.1:4141/v1",
-    "apiKey": "sk-1234",
-    "api": "openai-completions",
-    "models": [
-        {
-            "id": "auto",
-            "name": "LiteLLM Auto",
-            "reasoning": False,
-            "input": ["text"],
-            "cost": {
-                "input": 0,
-                "output": 0,
-                "cacheRead": 0,
-                "cacheWrite": 0
-            },
-            "contextWindow": 128000,
-            "maxTokens": 8192
-        }
-    ]
-}
+    config["models"]["providers"]["litellm"] = {
+        "baseUrl": "http://127.0.0.1:4141/v1",
+        "apiKey": "sk-1234",
+        "api": "openai-completions",
+        "models": [
+            {
+                "id": "auto",
+                "name": "LiteLLM Auto",
+                "reasoning": False,
+                "input": ["text"],
+                "cost": {
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0
+                },
+                "contextWindow": 128000,
+                "maxTokens": 8192
+            }
+        ]
+    }
 
-# Set litellm/auto as the primary model
-config.setdefault("agents", {})
-config["agents"].setdefault("defaults", {})
-old_primary = config["agents"]["defaults"].get("model", {}).get("primary")
-config["agents"]["defaults"]["model"] = {
-    "primary": "litellm/auto",
-}
-if old_primary and old_primary != "litellm/auto":
-    config["agents"]["defaults"]["model"]["fallbacks"] = [old_primary]
+    # Set litellm/auto as the primary model
+    config.setdefault("agents", {})
+    config["agents"].setdefault("defaults", {})
+    old_primary = config["agents"]["defaults"].get("model", {}).get("primary")
+    config["agents"]["defaults"]["model"] = {
+        "primary": "litellm/auto",
+    }
+    if old_primary and old_primary != "litellm/auto":
+        config["agents"]["defaults"]["model"]["fallbacks"] = [old_primary]
 
-with open(config_path, "w") as f:
-    json.dump(config, f, indent=2)
-    f.write("\n")
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+except Exception as e:
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
 PYEOF
-    ok "Added litellm provider with auto model to $OPENCLAW_CONFIG"
+)
+    if [ $? -ne 0 ]; then
+        warn "Failed to register litellm provider in OpenClaw config. Error: $OPENCLAW_RESULT"
+    else
+        ok "Added litellm provider with auto model to $OPENCLAW_CONFIG"
+    fi
 else
     info "OpenClaw not found (~/.openclaw/openclaw.json missing) — skipping provider registration"
 fi
@@ -389,23 +542,58 @@ echo -e "${GREEN}Starting...${NC}"
 echo ""
 
 # Load env vars
+info "Loading environment variables from $ENV_FILE..."
 set -a
 # shellcheck disable=SC1091
 source "$ENV_FILE"
+if [ $? -ne 0 ]; then
+    fail "Failed to source environment file at $ENV_FILE"
+fi
 set +a
 
 # Kill any existing process on port 4141
 PORT=4141
-EXISTING_PID=$(lsof -ti:$PORT 2>/dev/null)
-if [ -n "$EXISTING_PID" ]; then
-    warn "Killing existing process on port $PORT (PID: $EXISTING_PID)"
-    kill "$EXISTING_PID" 2>/dev/null
+info "Checking for existing processes on port $PORT..."
+EXISTING_PIDS=""
+if command -v lsof >/dev/null 2>&1; then
+    EXISTING_PIDS=$(lsof -ti:"$PORT" 2>/dev/null)
+elif command -v fuser >/dev/null 2>&1; then
+    EXISTING_PIDS=$(fuser "$PORT/tcp" 2>/dev/null | tr -s ' ' '\n')
+elif command -v ss >/dev/null 2>&1; then
+    EXISTING_PIDS=$(ss -tlnp "sport = :$PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p')
+fi
+
+if [ -n "$EXISTING_PIDS" ]; then
+    for pid in $EXISTING_PIDS; do
+        warn "Killing process on port $PORT (PID: $pid)"
+        kill "$pid"
+        if [ $? -ne 0 ]; then
+            warn "Failed to send TERM signal to PID $pid"
+        fi
+    done
+    sleep 2
+    # Force kill any that are still running
+    for pid in $EXISTING_PIDS; do
+        if kill -0 "$pid" 2>/dev/null; then
+            warn "Force-killing PID $pid"
+            kill -9 "$pid"
+            if [ $? -ne 0 ]; then
+                warn "Failed to send KILL signal to PID $pid"
+            fi
+        fi
+    done
     sleep 1
-    # Force kill if still running
-    if kill -0 "$EXISTING_PID" 2>/dev/null; then
-        kill -9 "$EXISTING_PID" 2>/dev/null
-    fi
     ok "Port $PORT cleared"
 fi
 
-exec ./.venv/bin/litellm --config "$CONFIG_FILE" --port 4141
+# Final check that litellm binary exists before exec
+LITELLM_BIN="$VENV_DIR/bin/litellm"
+if [ ! -x "$LITELLM_BIN" ]; then
+    fail "LiteLLM binary not found or not executable at $LITELLM_BIN
+
+  Expected location: $LITELLM_BIN
+  Installation may have failed or the virtual environment is corrupted."
+fi
+
+info "Starting LiteLLM proxy server..."
+exec "$LITELLM_BIN" --config "$CONFIG_FILE" --port 4141
