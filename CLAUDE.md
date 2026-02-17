@@ -17,7 +17,37 @@ To configure the "model-routing Proxy", note:
 
 ### Quick Start
 ```bash
-./setup.sh          # One-command setup: installs deps, prompts for API keys, configures tiers, starts proxy
+./setup.sh             # Direct mode: installs deps, configures tiers, starts proxy (port 4141)
+./setup.sh --docker    # Docker mode: builds image, starts proxy + PostgreSQL, enables per-user API keys
+```
+
+### Docker Mode (Per-User API Keys)
+```bash
+./setup.sh --docker    # Builds clawrouter:local image, starts proxy + PostgreSQL
+```
+
+Launches:
+- LiteLLM proxy with Admin UI at `http://localhost:4141/ui`
+- PostgreSQL 16 for per-user virtual key management
+- Auto-router routing requests through configured tier models
+
+Manage keys:
+```bash
+# Via Admin UI (easiest)
+open http://localhost:4141/ui
+
+# Via API
+curl -X POST http://localhost:4141/key/generate \
+  -H "Authorization: Bearer <LITELLM_MASTER_KEY from .env>" \
+  -H "Content-Type: application/json" \
+  -d '{"models": ["auto"], "max_budget": 10}'
+```
+
+Container management:
+```bash
+docker compose -f docker-compose.clawrouter.yml logs -f litellm  # View logs
+docker compose -f docker-compose.clawrouter.yml down              # Stop
+./build_docker_for_setup.sh --force                               # Force image rebuild
 ```
 
 ### Manual Start
