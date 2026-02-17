@@ -1,0 +1,55 @@
+# ClawRouter Docker Deployment — per-user API key support
+# Usage: ./setup.sh --docker  (or manually: docker compose -f docker-compose.clawrouter.yml up -d)
+
+services:
+  litellm:
+    image: clawrouter:local
+    ports:
+      - "${CLAWROUTER_PORT:-4141}:4000" # Map host port (default 4141) to container port 4000
+    volumes:
+      - ./litellm/proxy/proxy_config.yaml:/app/config.yaml:ro
+      - ./litellm/router_strategy/auto_router/routing_rules.yaml:/app/litellm/router_strategy/auto_router/routing_rules.yaml:ro
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--port"
+      - "4000"
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:${POSTGRES_PASSWORD:-dbpassword9090}@db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-1234}"
+    env_file:
+      - .env # Passes API keys (GOOGLE_API_KEY, AWS creds, etc.) from host
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  db:
+    image: postgres:16
+    restart: always
+    container_name: clawrouter_db
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-dbpassword9090}"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - clawrouter_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  clawrouter_postgres_data:
+    name: clawrouter_postgres_data
