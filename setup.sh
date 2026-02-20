@@ -3,8 +3,10 @@
 # LiteLLM Proxy Setup Script
 #
 # Usage:
-#   ./setup.sh             # Direct mode (no Docker)
-#   ./setup.sh --docker    # Docker mode with per-user API keys
+#   ./setup.sh                      # Direct mode (no Docker), port 4141
+#   ./setup.sh --port 4242          # Direct mode on custom port
+#   ./setup.sh --docker             # Docker mode with per-user API keys, port 4141
+#   ./setup.sh --docker --port 4343 # Docker mode on custom port
 #
 # This script:
 #   1. Checks for Python 3.10+
@@ -34,12 +36,21 @@ VENV_DIR="$REPO_ROOT/.venv"
 ENV_FILE="$REPO_ROOT/.env"
 MODELS_FILE="$REPO_ROOT/models.yaml"
 
-# ---------- Docker mode flag ---------------------------------------------------
+# ---------- CLI flags ----------------------------------------------------------
 DOCKER_MODE=false
-for arg in "$@"; do
-    case "$arg" in
+PROXY_PORT=4141
+while [ $# -gt 0 ]; do
+    case "$1" in
         --docker) DOCKER_MODE=true ;;
+        --port)
+            shift
+            PROXY_PORT="$1"
+            if [ -z "$PROXY_PORT" ] || ! echo "$PROXY_PORT" | grep -qE '^[0-9]+$'; then
+                fail "--port requires a numeric value (e.g. --port 4242)"
+            fi
+            ;;
     esac
+    shift
 done
 
 MIN_PY_MINOR=10  # Python 3.10+ required (mcp, python-multipart, polars need it)
@@ -496,7 +507,7 @@ OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
 
 if [ -f "$OPENCLAW_CONFIG" ]; then
     info "Registering litellm provider in OpenClaw config..."
-    OPENCLAW_RESULT=$(python << 'PYEOF'
+    OPENCLAW_RESULT=$(PROXY_PORT="$PROXY_PORT" python << 'PYEOF'
 import json, os, sys
 
 try:
@@ -509,7 +520,7 @@ try:
     config["models"].setdefault("providers", {})
 
     config["models"]["providers"]["litellm"] = {
-        "baseUrl": "http://127.0.0.1:4141/v1",
+        "baseUrl": f"http://127.0.0.1:{os.environ.get('PROXY_PORT', '4141')}/v1",
         "apiKey": "sk-1234",
         "api": "openai-completions",
         "models": [
@@ -567,7 +578,7 @@ if [ "$DOCKER_MODE" = true ]; then
     # --- Docker mode ---
     echo -e "  Mode   : ${CYAN}Docker (PostgreSQL + Admin UI)${NC}"
     echo -e "  Config : ${CYAN}$CONFIG_FILE${NC} (volume-mounted into container)"
-    echo -e "  Port   : ${CYAN}${CLAWROUTER_PORT:-4141}${NC}"
+    echo -e "  Port   : ${CYAN}${PROXY_PORT}${NC}"
     echo ""
 
     # Read master key from .env for display
@@ -589,7 +600,7 @@ if [ "$DOCKER_MODE" = true ]; then
 
     # Start the stack
     info "Starting ClawRouter Docker stack..."
-    CLAWROUTER_PORT="${CLAWROUTER_PORT:-4141}" docker compose -f "$REPO_ROOT/docker-compose.clawrouter.yml" up -d
+    CLAWROUTER_PORT="$PROXY_PORT" docker compose -f "$REPO_ROOT/docker-compose.clawrouter.yml" up -d
     if [ $? -ne 0 ]; then
         fail "Failed to start Docker containers. Check 'docker compose -f docker-compose.clawrouter.yml logs' for details."
     fi
@@ -598,7 +609,7 @@ if [ "$DOCKER_MODE" = true ]; then
     info "Waiting for proxy to become healthy (up to 60s)..."
     _HEALTHY=false
     for i in $(seq 1 30); do
-        if curl -sf "http://localhost:${CLAWROUTER_PORT:-4141}/health/liveliness" > /dev/null; then
+        if curl -sf "http://localhost:${PROXY_PORT}/health/liveliness" > /dev/null; then
             _HEALTHY=true
             break
         fi
@@ -615,18 +626,18 @@ if [ "$DOCKER_MODE" = true ]; then
     echo ""
     echo -e "${BOLD}=== ClawRouter Docker Stack Running ===${NC}"
     echo ""
-    echo -e "  Proxy    : ${CYAN}http://localhost:${CLAWROUTER_PORT:-4141}${NC}"
-    echo -e "  Admin UI : ${CYAN}http://localhost:${CLAWROUTER_PORT:-4141}/ui${NC}"
+    echo -e "  Proxy    : ${CYAN}http://localhost:${PROXY_PORT}${NC}"
+    echo -e "  Admin UI : ${CYAN}http://localhost:${PROXY_PORT}/ui${NC}"
     echo -e "  Key      : ${CYAN}$_MASTER_KEY${NC}"
     echo ""
     echo -e "${BOLD}Create a virtual key (per-user API key):${NC}"
-    echo "  curl -X POST http://localhost:${CLAWROUTER_PORT:-4141}/key/generate \\"
+    echo "  curl -X POST http://localhost:${PROXY_PORT}/key/generate \\"
     echo "    -H 'Authorization: Bearer $_MASTER_KEY' \\"
     echo "    -H 'Content-Type: application/json' \\"
     echo "    -d '{\"models\": [\"auto\"], \"max_budget\": 10}'"
     echo ""
     echo -e "${BOLD}Manage keys via UI:${NC}"
-    echo "  open http://localhost:${CLAWROUTER_PORT:-4141}/ui"
+    echo "  open http://localhost:${PROXY_PORT}/ui"
     echo ""
     echo -e "${BOLD}Manage containers:${NC}"
     echo "  Stop  : docker compose -f docker-compose.clawrouter.yml down"
@@ -636,16 +647,16 @@ if [ "$DOCKER_MODE" = true ]; then
 else
     # --- Direct mode (original behavior) ---
     echo -e "  Config : ${CYAN}$CONFIG_FILE${NC}"
-    echo -e "  Port   : ${CYAN}4141${NC}"
+    echo -e "  Port   : ${CYAN}$PROXY_PORT${NC}"
     echo -e "  Key    : ${CYAN}sk-1234${NC}  (set in config litellm_settings.master_key)"
     echo ""
     echo -e "${BOLD}Test it:${NC}"
     echo ""
     echo "  # Health check"
-    echo "  curl http://localhost:4141/health"
+    echo "  curl http://localhost:$PROXY_PORT/health"
     echo ""
     echo "  # Chat completion via the auto-router"
-    echo '  curl http://localhost:4141/v1/chat/completions \'
+    echo "  curl http://localhost:$PROXY_PORT/v1/chat/completions \\"
     echo '    -H "Content-Type: application/json" \'
     echo '    -H "Authorization: Bearer sk-1234" \'
     echo '    -d '"'"'{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'"'"
@@ -663,8 +674,8 @@ else
     fi
     set +a
 
-    # Kill any existing process on port 4141
-    PORT=4141
+    # Kill any existing process on port $PROXY_PORT
+    PORT=$PROXY_PORT
     info "Checking for existing processes on port $PORT..."
     EXISTING_PIDS=""
     if command -v lsof >/dev/null 2>&1; then
@@ -708,5 +719,5 @@ else
     fi
 
     info "Starting LiteLLM proxy server..."
-    exec "$LITELLM_BIN" --config "$CONFIG_FILE" --port 4141
+    exec "$LITELLM_BIN" --config "$CONFIG_FILE" --port "$PROXY_PORT"
 fi
