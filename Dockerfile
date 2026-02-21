@@ -13,16 +13,24 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
+RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev curl nodejs npm
 
 RUN python -m pip install build
 
 # Copy the current directory contents into the container at /app
 COPY . .
 
-# Build Admin UI
-# Convert Windows line endings to Unix and make executable
-RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+# Build Admin UI (enterprise custom colors if available, otherwise default)
+RUN if [ -f "enterprise/enterprise_ui/enterprise_colors.json" ]; then \
+        cp enterprise/enterprise_ui/enterprise_colors.json ui/litellm-dashboard/ui_colors.json; \
+    fi
+WORKDIR /app/ui/litellm-dashboard
+RUN npm install
+RUN npm run build
+RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
+    cp -r ./out/* /app/litellm/proxy/_experimental/out/ && \
+    rm -rf ./out
+WORKDIR /app
 
 # Build the package
 RUN rm -rf dist/* && python -m build
@@ -59,6 +67,9 @@ RUN ls -la /app
 # Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
+
+# Copy the built Admin UI from the builder stage (overwrite old gitignored files)
+COPY --from=builder /app/litellm/proxy/_experimental/out /app/litellm/proxy/_experimental/out
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
