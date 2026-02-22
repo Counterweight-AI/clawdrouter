@@ -3,9 +3,10 @@
 # LiteLLM Proxy Setup Script
 #
 # Usage:
-#   git clone https://github.com/Counterweight-AI/litellm.git
-#   cd litellm
-#   ./setup.sh
+#   ./setup.sh                      # Direct mode (no Docker), port 4141
+#   ./setup.sh --port 4242          # Direct mode on custom port
+#   ./setup.sh --docker             # Docker mode with per-user API keys, port 4141
+#   ./setup.sh --docker --port 4343 # Docker mode on custom port
 #
 # This script:
 #   1. Checks for Python 3.10+
@@ -34,6 +35,23 @@ ROUTING_RULES="$REPO_ROOT/litellm/router_strategy/auto_router/routing_rules.yaml
 VENV_DIR="$REPO_ROOT/.venv"
 ENV_FILE="$REPO_ROOT/.env"
 MODELS_FILE="$REPO_ROOT/models.yaml"
+
+# ---------- CLI flags ----------------------------------------------------------
+DOCKER_MODE=false
+PROXY_PORT=4141
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --docker) DOCKER_MODE=true ;;
+        --port)
+            shift
+            PROXY_PORT="$1"
+            if [ -z "$PROXY_PORT" ] || ! echo "$PROXY_PORT" | grep -qE '^[0-9]+$'; then
+                fail "--port requires a numeric value (e.g. --port 4242)"
+            fi
+            ;;
+    esac
+    shift
+done
 
 MIN_PY_MINOR=10  # Python 3.10+ required (mcp, python-multipart, polars need it)
 MAX_PY_MINOR=13  # Python 3.14+ breaks uvloop; cap at 3.13
@@ -78,6 +96,8 @@ if [ -n "$MISSING" ]; then
 
   Then re-run: ./setup.sh"
 fi
+
+if [ "$DOCKER_MODE" = false ]; then
 
 # ---------- 1. Python check -------------------------------------------------
 
@@ -228,6 +248,8 @@ if [ $? -ne 0 ]; then
 fi
 ok "Installed litellm $LITELLM_VERSION"
 
+fi # end DOCKER_MODE=false guard for steps 1-3
+
 # ---------- 4. Patch proxy config -------------------------------------------
 
 info "Configuring proxy config for this machine..."
@@ -240,16 +262,22 @@ if [ ! -f "$ROUTING_RULES" ]; then
     fail "Routing rules not found at $ROUTING_RULES"
 fi
 
-# Fix the auto_router_config_path to point to this clone's absolute path
+# Fix the auto_router_config_path to point to the correct path
 info "Updating auto_router_config_path in proxy config..."
-sedi "s|auto_router_config_path:.*|auto_router_config_path: \"$ROUTING_RULES\"|" "$CONFIG_FILE"
-if ! grep -q "auto_router_config_path: \"$ROUTING_RULES\"" "$CONFIG_FILE"; then
+if [ "$DOCKER_MODE" = true ]; then
+    # Inside the container, routing_rules.yaml is volume-mounted at this path
+    _CONFIG_PATH="/app/litellm/router_strategy/auto_router/routing_rules.yaml"
+else
+    _CONFIG_PATH="$ROUTING_RULES"
+fi
+sedi "s|auto_router_config_path:.*|auto_router_config_path: \"$_CONFIG_PATH\"|" "$CONFIG_FILE"
+if ! grep -q "auto_router_config_path: \"$_CONFIG_PATH\"" "$CONFIG_FILE"; then
     fail "Failed to update auto_router_config_path in $CONFIG_FILE
 
   Expected pattern not found after sed replacement.
-  Manual fix required: set auto_router_config_path to $ROUTING_RULES"
+  Manual fix required: set auto_router_config_path to $_CONFIG_PATH"
 fi
-ok "Updated auto_router_config_path -> $ROUTING_RULES"
+ok "Updated auto_router_config_path -> $_CONFIG_PATH"
 
 # Disable mcp_semantic_tool_filter (requires optional semantic-router package)
 info "Disabling mcp_semantic_tool_filter..."
@@ -278,6 +306,28 @@ EOF
     ok "Created .env from environment variables"
 else
     ok ".env already exists — using existing file"
+fi
+
+# ---------- 5a-docker. Docker mode: enable DB + generate master key ----------
+if [ "$DOCKER_MODE" = true ]; then
+    info "Enabling database-backed key management for Docker mode..."
+    # Enable DB storage in proxy config
+    sedi 's/store_model_in_db: false/store_model_in_db: true/' "$CONFIG_FILE"
+    # Add database_url using env var reference (LiteLLM resolves os.environ/ at startup)
+    if ! grep -q 'database_url:' "$CONFIG_FILE"; then
+        sedi '/^general_settings:/a\  database_url: "os.environ/DATABASE_URL"' "$CONFIG_FILE"
+    fi
+    # Use env var reference for master_key (so Docker compose can inject it)
+    sedi 's/master_key: sk-1234/master_key: os.environ\/LITELLM_MASTER_KEY/' "$CONFIG_FILE"
+    # Generate master key if not already in .env
+    if ! grep -q 'LITELLM_MASTER_KEY=' "$ENV_FILE"; then
+        GENERATED_KEY="sk-$(openssl rand -hex 16)"
+        echo "LITELLM_MASTER_KEY=$GENERATED_KEY" >> "$ENV_FILE"
+        ok "Generated master key: $GENERATED_KEY (saved to .env)"
+    else
+        ok "Master key already set in .env"
+    fi
+    ok "Database and key management configured for Docker mode"
 fi
 
 # ---------- 5b. Set auto-router tier models ---------------------------------
@@ -457,7 +507,7 @@ OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
 
 if [ -f "$OPENCLAW_CONFIG" ]; then
     info "Registering litellm provider in OpenClaw config..."
-    OPENCLAW_RESULT=$(python << 'PYEOF'
+    OPENCLAW_RESULT=$(PROXY_PORT="$PROXY_PORT" python << 'PYEOF'
 import json, os, sys
 
 try:
@@ -470,7 +520,7 @@ try:
     config["models"].setdefault("providers", {})
 
     config["models"]["providers"]["litellm"] = {
-        "baseUrl": "http://127.0.0.1:4141/v1",
+        "baseUrl": f"http://127.0.0.1:{os.environ.get('PROXY_PORT', '4141')}/v1",
         "apiKey": "sk-1234",
         "api": "openai-completions",
         "models": [
@@ -523,77 +573,151 @@ fi
 echo ""
 echo -e "${BOLD}=== Starting LiteLLM Proxy ===${NC}"
 echo ""
-echo -e "  Config : ${CYAN}$CONFIG_FILE${NC}"
-echo -e "  Port   : ${CYAN}4141${NC}"
-echo -e "  Key    : ${CYAN}sk-1234${NC}  (set in config litellm_settings.master_key)"
-echo ""
-echo -e "${BOLD}Test it:${NC}"
-echo ""
-echo "  # Health check"
-echo "  curl http://localhost:4141/health"
-echo ""
-echo "  # Chat completion via the auto-router"
-echo '  curl http://localhost:4141/v1/chat/completions \'
-echo '    -H "Content-Type: application/json" \'
-echo '    -H "Authorization: Bearer sk-1234" \'
-echo '    -d '"'"'{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'"'"
-echo ""
-echo -e "${GREEN}Starting...${NC}"
-echo ""
 
-# Load env vars
-info "Loading environment variables from $ENV_FILE..."
-set -a
-# shellcheck disable=SC1091
-source "$ENV_FILE"
-if [ $? -ne 0 ]; then
-    fail "Failed to source environment file at $ENV_FILE"
-fi
-set +a
+if [ "$DOCKER_MODE" = true ]; then
+    # --- Docker mode ---
+    echo -e "  Mode   : ${CYAN}Docker (PostgreSQL + Admin UI)${NC}"
+    echo -e "  Config : ${CYAN}$CONFIG_FILE${NC} (volume-mounted into container)"
+    echo -e "  Port   : ${CYAN}${PROXY_PORT}${NC}"
+    echo ""
 
-# Kill any existing process on port 4141
-PORT=4141
-info "Checking for existing processes on port $PORT..."
-EXISTING_PIDS=""
-if command -v lsof >/dev/null 2>&1; then
-    EXISTING_PIDS=$(lsof -ti:"$PORT" 2>/dev/null)
-elif command -v fuser >/dev/null 2>&1; then
-    EXISTING_PIDS=$(fuser "$PORT/tcp" 2>/dev/null | tr -s ' ' '\n')
-elif command -v ss >/dev/null 2>&1; then
-    EXISTING_PIDS=$(ss -tlnp "sport = :$PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p')
-fi
+    # Read master key from .env for display
+    _MASTER_KEY=$(grep '^LITELLM_MASTER_KEY=' "$ENV_FILE" | cut -d'=' -f2-)
+    if [ -z "$_MASTER_KEY" ]; then
+        _MASTER_KEY="sk-1234"
+    fi
 
-if [ -n "$EXISTING_PIDS" ]; then
-    for pid in $EXISTING_PIDS; do
-        warn "Killing process on port $PORT (PID: $pid)"
-        kill "$pid"
-        if [ $? -ne 0 ]; then
-            warn "Failed to send TERM signal to PID $pid"
+    # Build the Docker image
+    info "Building Docker image (skipped if up to date)..."
+    "$REPO_ROOT/build_docker_for_setup.sh"
+    if [ $? -ne 0 ]; then
+        fail "Docker image build failed. Check the output above."
+    fi
+
+    # Stop any existing ClawRouter containers
+    info "Stopping any existing ClawRouter containers..."
+    docker compose -f "$REPO_ROOT/docker-compose.clawrouter.yml" down
+
+    # Start the stack
+    info "Starting ClawRouter Docker stack..."
+    CLAWROUTER_PORT="$PROXY_PORT" docker compose -f "$REPO_ROOT/docker-compose.clawrouter.yml" up -d
+    if [ $? -ne 0 ]; then
+        fail "Failed to start Docker containers. Check 'docker compose -f docker-compose.clawrouter.yml logs' for details."
+    fi
+
+    # Wait for health check
+    info "Waiting for proxy to become healthy (up to 60s)..."
+    _HEALTHY=false
+    for i in $(seq 1 30); do
+        if curl -sf "http://localhost:${PROXY_PORT}/health/liveliness" > /dev/null; then
+            _HEALTHY=true
+            break
         fi
+        sleep 2
     done
-    sleep 2
-    # Force kill any that are still running
-    for pid in $EXISTING_PIDS; do
-        if kill -0 "$pid" 2>/dev/null; then
-            warn "Force-killing PID $pid"
-            kill -9 "$pid"
+
+    if [ "$_HEALTHY" = false ]; then
+        warn "Proxy health check timed out. It may still be starting."
+        warn "Check logs: docker compose -f docker-compose.clawrouter.yml logs -f litellm"
+    else
+        ok "Proxy is healthy!"
+    fi
+
+    echo ""
+    echo -e "${BOLD}=== ClawRouter Docker Stack Running ===${NC}"
+    echo ""
+    echo -e "  Proxy    : ${CYAN}http://localhost:${PROXY_PORT}${NC}"
+    echo -e "  Admin UI : ${CYAN}http://localhost:${PROXY_PORT}/ui${NC}"
+    echo -e "  Key      : ${CYAN}$_MASTER_KEY${NC}"
+    echo ""
+    echo -e "${BOLD}Create a virtual key (per-user API key):${NC}"
+    echo "  curl -X POST http://localhost:${PROXY_PORT}/key/generate \\"
+    echo "    -H 'Authorization: Bearer $_MASTER_KEY' \\"
+    echo "    -H 'Content-Type: application/json' \\"
+    echo "    -d '{\"models\": [\"auto\"], \"max_budget\": 10}'"
+    echo ""
+    echo -e "${BOLD}Manage keys via UI:${NC}"
+    echo "  open http://localhost:${PROXY_PORT}/ui"
+    echo ""
+    echo -e "${BOLD}Manage containers:${NC}"
+    echo "  Stop  : docker compose -f docker-compose.clawrouter.yml down"
+    echo "  Logs  : docker compose -f docker-compose.clawrouter.yml logs -f litellm"
+    echo "  Rebuild: ./build_docker_for_setup.sh --force"
+
+else
+    # --- Direct mode (original behavior) ---
+    echo -e "  Config : ${CYAN}$CONFIG_FILE${NC}"
+    echo -e "  Port   : ${CYAN}$PROXY_PORT${NC}"
+    echo -e "  Key    : ${CYAN}sk-1234${NC}  (set in config litellm_settings.master_key)"
+    echo ""
+    echo -e "${BOLD}Test it:${NC}"
+    echo ""
+    echo "  # Health check"
+    echo "  curl http://localhost:$PROXY_PORT/health"
+    echo ""
+    echo "  # Chat completion via the auto-router"
+    echo "  curl http://localhost:$PROXY_PORT/v1/chat/completions \\"
+    echo '    -H "Content-Type: application/json" \'
+    echo '    -H "Authorization: Bearer sk-1234" \'
+    echo '    -d '"'"'{"model":"auto","messages":[{"role":"user","content":"Hello!"}]}'"'"
+    echo ""
+    echo -e "${GREEN}Starting...${NC}"
+    echo ""
+
+    # Load env vars
+    info "Loading environment variables from $ENV_FILE..."
+    set -a
+    # shellcheck disable=SC1091
+    source "$ENV_FILE"
+    if [ $? -ne 0 ]; then
+        fail "Failed to source environment file at $ENV_FILE"
+    fi
+    set +a
+
+    # Kill any existing process on port $PROXY_PORT
+    PORT=$PROXY_PORT
+    info "Checking for existing processes on port $PORT..."
+    EXISTING_PIDS=""
+    if command -v lsof >/dev/null 2>&1; then
+        EXISTING_PIDS=$(lsof -ti:"$PORT" 2>/dev/null)
+    elif command -v fuser >/dev/null 2>&1; then
+        EXISTING_PIDS=$(fuser "$PORT/tcp" 2>/dev/null | tr -s ' ' '\n')
+    elif command -v ss >/dev/null 2>&1; then
+        EXISTING_PIDS=$(ss -tlnp "sport = :$PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p')
+    fi
+
+    if [ -n "$EXISTING_PIDS" ]; then
+        for pid in $EXISTING_PIDS; do
+            warn "Killing process on port $PORT (PID: $pid)"
+            kill "$pid"
             if [ $? -ne 0 ]; then
-                warn "Failed to send KILL signal to PID $pid"
+                warn "Failed to send TERM signal to PID $pid"
             fi
-        fi
-    done
-    sleep 1
-    ok "Port $PORT cleared"
-fi
+        done
+        sleep 2
+        # Force kill any that are still running
+        for pid in $EXISTING_PIDS; do
+            if kill -0 "$pid" 2>/dev/null; then
+                warn "Force-killing PID $pid"
+                kill -9 "$pid"
+                if [ $? -ne 0 ]; then
+                    warn "Failed to send KILL signal to PID $pid"
+                fi
+            fi
+        done
+        sleep 1
+        ok "Port $PORT cleared"
+    fi
 
-# Final check that litellm binary exists before exec
-LITELLM_BIN="$VENV_DIR/bin/litellm"
-if [ ! -x "$LITELLM_BIN" ]; then
-    fail "LiteLLM binary not found or not executable at $LITELLM_BIN
+    # Final check that litellm binary exists before exec
+    LITELLM_BIN="$VENV_DIR/bin/litellm"
+    if [ ! -x "$LITELLM_BIN" ]; then
+        fail "LiteLLM binary not found or not executable at $LITELLM_BIN
 
   Expected location: $LITELLM_BIN
   Installation may have failed or the virtual environment is corrupted."
-fi
+    fi
 
-info "Starting LiteLLM proxy server..."
-exec "$LITELLM_BIN" --config "$CONFIG_FILE" --port 4141
+    info "Starting LiteLLM proxy server..."
+    exec "$LITELLM_BIN" --config "$CONFIG_FILE" --port "$PROXY_PORT"
+fi
