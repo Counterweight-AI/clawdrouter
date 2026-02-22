@@ -25,6 +25,7 @@ from litellm.router_strategy.auto_router.classifier import (
     ClassificationRule,
     TaskCategory,
     classify_task,
+    get_routing_keywords,
 )
 from litellm.router_strategy.auto_router.tiers import (
     ModelTier,
@@ -746,3 +747,42 @@ routing:
         assert isinstance(config, RoutingConfig)
         # Should have all defaults
         assert len(config.tier_models) == 3
+
+
+# ─── get_routing_keywords tests ─────────────────────────────────────
+
+
+class TestGetRoutingKeywords:
+    """Test get_routing_keywords() returns a complete, valid keyword map."""
+
+    def test_returns_all_categories(self):
+        keywords = get_routing_keywords()
+        for category in TaskCategory:
+            assert category in keywords, f"Missing category: {category}"
+
+    def test_each_category_has_entries(self):
+        keywords = get_routing_keywords()
+        for category, phrases in keywords.items():
+            assert len(phrases) > 0, f"No phrases for category: {category}"
+
+    def test_all_values_are_strings(self):
+        keywords = get_routing_keywords()
+        for category, phrases in keywords.items():
+            for phrase in phrases:
+                assert isinstance(phrase, str), (
+                    f"Non-string phrase in {category}: {phrase!r}"
+                )
+
+    def test_heartbeat_includes_hi(self):
+        keywords = get_routing_keywords()
+        assert "hi" in keywords[TaskCategory.HEARTBEAT]
+
+    def test_coding_includes_git_commit(self):
+        keywords = get_routing_keywords()
+        coding = keywords[TaskCategory.CODING]
+        assert any("git commit" in p for p in coding)
+
+    def test_reasoning_includes_prove_that(self):
+        keywords = get_routing_keywords()
+        reasoning = keywords[TaskCategory.REASONING]
+        assert any("prove that" in p for p in reasoning)

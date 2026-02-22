@@ -201,6 +201,69 @@ DEFAULT_PATTERNS: Sequence[ClassificationRule] = [
 ]
 
 
+def get_routing_keywords() -> "dict[TaskCategory, list[str]]":
+    """Return representative trigger phrases for each routing category.
+
+    Useful for introspection: callers can display these to users to explain
+    what kinds of messages are routed to which model tier.
+
+    Returns:
+        A dict mapping each TaskCategory to a list of example trigger phrases.
+    """
+    return {
+        TaskCategory.HEARTBEAT: [
+            "hi", "hey", "hello", "ping", "test", "yo", "sup",
+            "are you there?", "alive?", "read heartbeat.md", "heartbeat_ok",
+        ],
+        TaskCategory.SIMPLE_CHAT: [
+            "(any short message under ~80 characters that doesn't match another category)",
+        ],
+        TaskCategory.LOOKUP: [
+            "what is ...", "what are ...", "who is ...", "who was ...",
+            "when did ...", "where is ...", "how many ...", "how much ...",
+            "define ...", "definition of ...", "what does X mean",
+            "is it true that ...", "capital of ...", "population of ...",
+        ],
+        TaskCategory.TRANSLATION: [
+            "translate this to Spanish", "translate to French",
+            "in German", "into Japanese", "how do you say X in Y",
+        ],
+        TaskCategory.SUMMARIZATION: [
+            "summarize", "summary of", "tldr", "tl;dr",
+            "give me a summary", "briefly summarize",
+            "key points from", "key takeaways of",
+        ],
+        TaskCategory.CODING: [
+            "write a function", "write a class", "debug", "fix this code",
+            "implement", "refactor", "``` (code block)", "`inline code`",
+            "def ", "import ", "git commit", "git push", "npm install",
+            "pip install", "docker ", "kubectl ", "SELECT ", "INSERT ",
+            "traceback", "error", "exception", "localhost:PORT",
+        ],
+        TaskCategory.CREATIVE: [
+            "write me a story", "write a poem", "compose a haiku",
+            "draft an email", "create a short story", "write a joke",
+            "brainstorm ideas", "rewrite this", "rephrase",
+            "creative writing", "fiction",
+        ],
+        TaskCategory.REASONING: [
+            "prove that", "proof of", "explain why", "theorem", "lemma",
+            "derive ", "integral of", "derivative of",
+            "solve for", "calculate the probability",
+            "step-by-step reasoning", "chain of thought",
+            "multi-step", "by induction", "by contradiction",
+            "what would happen if", "consider the scenario",
+        ],
+        TaskCategory.ANALYSIS: [
+            "analyze", "compare", "evaluate", "assess", "review", "critique",
+            "research", "investigate", "examine",
+            "pros and cons", "trade-offs", "advantages and disadvantages",
+            "in-depth analysis", "strengths and weaknesses",
+            "comprehensive review",
+        ],
+    }
+
+
 def classify_task(
     text: str,
     custom_rules: Optional[Sequence[ClassificationRule]] = None,

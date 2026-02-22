@@ -85,6 +85,33 @@ routing:
   analysis: top
 ```
 
+## Routing Keywords
+
+ClawRouter classifies each message by matching it against regex patterns. The table below lists example trigger phrases for each category. The **first** matching category wins (order matters).
+
+| Category | Default Tier | Trigger phrases / keywords |
+|----------|-------------|---------------------------|
+| **heartbeat** | Low | `hi`, `hey`, `hello`, `ping`, `test`, `yo`, `sup`, `are you there?`, `alive?`, `read heartbeat.md`, `heartbeat_ok` |
+| **lookup** | Low | `what is ...`, `what are ...`, `who is/was ...`, `when did ...`, `where is ...`, `how many/much ...`, `define ...`, `definition of ...`, `what does X mean`, `capital of ...`, `population of ...` |
+| **simple-chat** | Low | Any short message (under 80 chars) that doesn't match another category |
+| **translation** | Mid | `translate this to Spanish`, `translate to French`, `in German`, `into Japanese`, `how do you say X in Y` |
+| **summarization** | Mid | `summarize`, `summary of`, `tldr`, `tl;dr`, `give me a summary`, `briefly summarize`, `key points from`, `key takeaways of` |
+| **coding** | Mid | code blocks (`` ``` ``), `` `inline code` ``, `def `, `import `, `write a function/class`, `debug`, `fix this code`, `implement`, `refactor`, `git commit/push/pull`, `npm install`, `pip install`, `docker `, `kubectl `, `SELECT/INSERT/UPDATE`, `traceback`, `error`, `exception`, `localhost:PORT` |
+| **creative** | Mid | `write me a story`, `write a poem`, `compose a haiku`, `draft an email`, `write a joke`, `brainstorm ideas`, `rewrite this`, `rephrase`, `creative writing`, `fiction` |
+| **reasoning** | Top | `prove that`, `proof of`, `explain why`, `theorem`, `lemma`, `derive `, `integral of`, `derivative of`, `solve for`, `step-by-step reasoning`, `chain of thought`, `multi-step`, `by induction`, `by contradiction`, `what would happen if` |
+| **analysis** | Top | `analyze`, `compare`, `evaluate`, `assess`, `review`, `critique`, `research`, `investigate`, `examine`, `pros and cons`, `trade-offs`, `advantages and disadvantages`, `in-depth analysis`, `strengths and weaknesses`, `comprehensive review` |
+
+> **Note**: The category→tier mapping is configurable in `routing_rules.yaml`. The table above shows the *default* tier for each category.
+
+You can query the full keyword list programmatically:
+
+```python
+from litellm.router_strategy.auto_router.classifier import get_routing_keywords
+keywords = get_routing_keywords()
+for category, phrases in keywords.items():
+    print(f"{category}: {phrases}")
+```
+
 ## User Controls
 
 **Force a tier** by prefixing your message:
