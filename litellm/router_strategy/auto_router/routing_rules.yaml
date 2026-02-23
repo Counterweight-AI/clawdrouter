@@ -7,21 +7,21 @@
 # Model tiers: map each cost tier to a specific model
 tiers:
   low:
-    model: "gemini/gemini-3-flash-preview"
+    model: "google/gemini-3-flash-preview"
     max_cost_per_m_tokens: 1.0
   mid:
-    model: "gemini/gemini-3-pro-preview"
-    max_cost_per_m_tokens: 5.0
+    model: "bedrock/claude-sonnet-4-6"
+    max_cost_per_m_tokens: 3.0
   top:
-    model: "bedrock/us.anthropic.claude-opus-4-6-v1"
-    max_cost_per_m_tokens: 30.0
+    model: "bedrock/claude-opus-4-6"
+    max_cost_per_m_tokens: 10.0
 
 # Category -> tier routing: which tier handles each task category
 # Categories: heartbeat, simple-chat, lookup, translation,
 #             summarization, coding, creative, reasoning, analysis
 routing:
   heartbeat: low
-  simple-chat: top
+  simple-chat: mid
   lookup: low
   translation: mid
   summarization: mid
