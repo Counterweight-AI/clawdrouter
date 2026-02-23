@@ -18,6 +18,7 @@ services:
       DATABASE_URL: "postgresql://llmproxy:${POSTGRES_PASSWORD:-dbpassword9090}@db:5432/litellm"
       STORE_MODEL_IN_DB: "True"
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-1234}"
+      CLAWROUTER_ROUTING_RULES_PATH: "/app/litellm/router_strategy/auto_router/routing_rules.yaml"
     env_file:
       - .env # Passes API keys (GOOGLE_API_KEY, AWS creds, etc.) from host
     depends_on:
