@@ -85,11 +85,98 @@ routing:
   analysis: top
 ```
 
+## Routing Keywords Reference
+
+ClawRouter classifies messages using regex patterns. The first pattern that matches wins. Here's what triggers each category and its default tier:
+
+### 🟢 LOW tier
+
+**Heartbeat** — system pings and short greetings
+- Single words: `hi`, `hey`, `hello`, `ping`, `test`, `yo`, `sup`, `hola`, `ok`, `okay`, `yes`, `no`, `thanks`, `thx`, `ty`
+- Questions: `are you there?`, `you there?`, `alive?`, `awake?`
+- System tokens: `read heartbeat.md`, `heartbeat_ok`, `reply heartbeat_ok`
+
+**Simple Chat** — any message under 80 characters that didn't match a more specific category
+
+**Lookup** — factual questions (message starts with these)
+- `what is ...`, `what are ...`
+- `who is / who was / who are / who were ...`
+- `when did / when was / when is / when will ...`
+- `where is / where was / where are / where were ...`
+- `how many / how much / how old / how long / how far / how tall / how big ...`
+- `define ...`, `definition of ...`, `what does ... mean`
+- `is it true that ...`
+- `capital of / population of / currency of ...`
+
+---
+
+### 🟡 MID tier
+
+**Translation**
+- `translate this / translate the / translate from ... to ...`
+- `in Spanish / in French / in German / in Chinese / in Japanese / in Korean` (and 15+ other languages)
+- `how do you say ... in [language]`
+
+**Summarization** — message starts with or contains:
+- `summarize`, `summary of`, `tldr`, `tl;dr`
+- `give me a summary`, `can you summarize`
+- `briefly summarize / briefly recap`
+- `key points from / key takeaways of`
+
+**Coding** — any of the following anywhere in the message:
+- Code fences ` ``` ` or inline backtick code
+- Programming keywords: `def`, `class`, `function`, `const`, `let`, `var`, `import`, `require(`
+- File extensions: `.py`, `.js`, `.ts`, `.go`, `.rs`, `.java`, `.cpp`, `.rb`, `.sh`, `.yaml`, `.json`
+- Action verbs + code nouns: `write/create/build/implement/fix/debug/refactor` + `function`, `class`, `api`, `endpoint`, `script`, `module`, `component`, `test`, `service`, etc.
+- Error words: `bug`, `error`, `exception`, `traceback`, `stack trace`, `segfault`
+- Package managers: `npm install`, `pip install`, `cargo`, `go get`, `apt`, `brew`, `yarn`, `pnpm install`
+- Git commands: `git commit`, `git push`, `git pull`, `git merge`, `git rebase`, `git clone`, `git diff`, `git log`, `git stash`, etc.
+- DevOps tools: `docker`, `kubectl`, `terraform`, `ansible`
+- SQL: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`
+- Pattern matching: `regex`, `regexp`, `pattern match`
+- URLs: `localhost:PORT`, `127.0.0.1:PORT`, `https://.../api/`
+
+**Creative** — message starts with or contains:
+- `write me a / write me an / write a / write an ...`
+- `compose`, `draft`
+- `create a story / poem / essay / article / blog / email / letter / speech / song`
+- `write a story / tell me a story / write a poem / write a joke / write a haiku / write a limerick / write a sonnet`
+- `creative writing`, `brainstorm ideas / names / titles / concepts`
+- `rewrite this / rephrase this / paraphrase this`
+
+---
+
+### 🔴 TOP tier
+
+**Reasoning** — math, proofs, and multi-step logic:
+- `prove that`, `proof of`, `explain why`
+- `what is the relationship between`
+- `derive`, `theorem`, `lemma`, `corollary`, `axiom`, `mathematically`
+- `integral of`, `derivative of`, `solve for`, `solve the equation`
+- `calculate the probability / expected / variance`
+- `if and only if`, `necessary and sufficient`
+- `by contradiction`, `by induction`
+- `what would happen if`, `consider the case / consider the scenario`
+- `step-by-step reasoning / thinking / logic / analysis`
+- `multi-step`, `chain-of-thought`
+
+**Analysis** — comparison and evaluation (message starts with or contains):
+- Starts with: `analyze`, `compare`, `evaluate`, `assess`, `review`, `critique`, `research`, `investigate`, `examine`
+- `pros and cons`, `trade-offs`, `advantages and disadvantages`
+- `in-depth analysis / in-depth review`
+- `strengths and weaknesses`
+- `comprehensive review / comprehensive analysis / comprehensive overview`
+
+---
+
+> **Note:** The routing table in `routing_rules.yaml` controls which tier each category maps to. The defaults above reflect the factory configuration but can be changed.
+
 ## User Controls
 
 **Force a tier** by prefixing your message:
 - `[low] what's 2+2` — force low tier model
 - `[med] write a python script` — force medium tier model
+- `[medium] write a python script` — same as `[med]`
 - `[high] prove this theorem` — force top tier model
 
 The tag is stripped before the model sees it.
