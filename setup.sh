@@ -328,6 +328,13 @@ if [ "$DOCKER_MODE" = true ]; then
         ok "Master key already set in .env"
     fi
     ok "Database and key management configured for Docker mode"
+else
+    # Remove database_url when running in direct mode (no DB needed)
+    sedi '/^  database_url:/d' "$CONFIG_FILE"
+    # Revert master_key to literal for direct mode (no DB to look up virtual keys)
+    sedi 's|master_key: os.environ/LITELLM_MASTER_KEY|master_key: sk-1234|' "$CONFIG_FILE"
+    # Ensure store_model_in_db is false for direct mode
+    sedi 's/store_model_in_db: true/store_model_in_db: false/' "$CONFIG_FILE"
 fi
 
 # ---------- 5b. Set auto-router tier models ---------------------------------
