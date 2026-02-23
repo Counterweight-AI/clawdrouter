@@ -250,9 +250,9 @@ ok "Installed litellm $LITELLM_VERSION"
 
 fi # end DOCKER_MODE=false guard for steps 1-3
 
-# ---------- 4. Patch proxy config -------------------------------------------
+# ---------- 4. Validate proxy config ------------------------------------------
 
-info "Configuring proxy config for this machine..."
+info "Validating proxy config..."
 
 if [ ! -f "$CONFIG_FILE" ]; then
     fail "Proxy config not found at $CONFIG_FILE"
@@ -262,27 +262,7 @@ if [ ! -f "$ROUTING_RULES" ]; then
     fail "Routing rules not found at $ROUTING_RULES"
 fi
 
-# Fix the auto_router_config_path to point to the correct path
-info "Updating auto_router_config_path in proxy config..."
-if [ "$DOCKER_MODE" = true ]; then
-    # Inside the container, routing_rules.yaml is volume-mounted at this path
-    _CONFIG_PATH="/app/litellm/router_strategy/auto_router/routing_rules.yaml"
-else
-    _CONFIG_PATH="$ROUTING_RULES"
-fi
-sedi "s|auto_router_config_path:.*|auto_router_config_path: \"$_CONFIG_PATH\"|" "$CONFIG_FILE"
-if ! grep -q "auto_router_config_path: \"$_CONFIG_PATH\"" "$CONFIG_FILE"; then
-    fail "Failed to update auto_router_config_path in $CONFIG_FILE
-
-  Expected pattern not found after sed replacement.
-  Manual fix required: set auto_router_config_path to $_CONFIG_PATH"
-fi
-ok "Updated auto_router_config_path -> $_CONFIG_PATH"
-
-# Disable mcp_semantic_tool_filter (requires optional semantic-router package)
-info "Disabling mcp_semantic_tool_filter..."
-sedi "s|enabled: true|enabled: false|" "$CONFIG_FILE"
-ok "Disabled mcp_semantic_tool_filter (enable after: pip install 'litellm[semantic-router]')"
+ok "Proxy config validated"
 
 # ---------- 5. API keys (.env) ----------------------------------------------
 info "Setting up environment file..."
@@ -308,17 +288,9 @@ else
     ok ".env already exists — using existing file"
 fi
 
-# ---------- 5a-docker. Docker mode: enable DB + generate master key ----------
+# ---------- 5a. Docker mode: generate master key if needed --------------------
 if [ "$DOCKER_MODE" = true ]; then
-    info "Enabling database-backed key management for Docker mode..."
-    # Enable DB storage in proxy config
-    sedi 's/store_model_in_db: false/store_model_in_db: true/' "$CONFIG_FILE"
-    # Add database_url using env var reference (LiteLLM resolves os.environ/ at startup)
-    if ! grep -q 'database_url:' "$CONFIG_FILE"; then
-        sedi '/^general_settings:/a\  database_url: "os.environ/DATABASE_URL"' "$CONFIG_FILE"
-    fi
-    # Use env var reference for master_key (so Docker compose can inject it)
-    sedi 's/master_key: sk-1234/master_key: os.environ\/LITELLM_MASTER_KEY/' "$CONFIG_FILE"
+    info "Configuring Docker mode..."
     # Generate master key if not already in .env
     if ! grep -q 'LITELLM_MASTER_KEY=' "$ENV_FILE"; then
         GENERATED_KEY="sk-$(openssl rand -hex 16)"
@@ -327,14 +299,7 @@ if [ "$DOCKER_MODE" = true ]; then
     else
         ok "Master key already set in .env"
     fi
-    ok "Database and key management configured for Docker mode"
-else
-    # Remove database_url when running in direct mode (no DB needed)
-    sedi '/^  database_url:/d' "$CONFIG_FILE"
-    # Revert master_key to literal for direct mode (no DB to look up virtual keys)
-    sedi 's|master_key: os.environ/LITELLM_MASTER_KEY|master_key: sk-1234|' "$CONFIG_FILE"
-    # Ensure store_model_in_db is false for direct mode
-    sedi 's/store_model_in_db: true/store_model_in_db: false/' "$CONFIG_FILE"
+    ok "Docker mode configured (env vars in docker-compose control DB + auth)"
 fi
 
 # ---------- 5b. Display tier models (read-only) -----------------------------
@@ -571,6 +536,10 @@ else
   Expected location: $LITELLM_BIN
   Installation may have failed or the virtual environment is corrupted."
     fi
+
+    # Set environment variables for direct mode
+    export CLAWROUTER_ROUTING_RULES_PATH="$ROUTING_RULES"
+    export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-1234}"
 
     info "Starting LiteLLM proxy server..."
     exec "$LITELLM_BIN" --config "$CONFIG_FILE" --port "$PROXY_PORT"
