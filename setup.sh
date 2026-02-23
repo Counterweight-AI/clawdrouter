@@ -337,176 +337,23 @@ else
     sedi 's/store_model_in_db: true/store_model_in_db: false/' "$CONFIG_FILE"
 fi
 
-# ---------- 5b. Set auto-router tier models ---------------------------------
-info "Setting tier models in routing_rules.yaml..."
-sedi '/^  low:/,/^  [a-z]/{s|model:.*|model: "gemini/gemini-3-flash-preview"|;}' "$ROUTING_RULES"
-sedi '/^  mid:/,/^  [a-z]/{s|model:.*|model: "gemini/gemini-3-pro-preview"|;}' "$ROUTING_RULES"
-sedi '/^  top:/,/^[a-z]/{s|model:.*|model: "bedrock/us.anthropic.claude-opus-4-6-v1"|;}' "$ROUTING_RULES"
+# ---------- 5b. Display tier models (read-only) -----------------------------
+info "Reading tier models from routing_rules.yaml..."
+_LOW_MODEL=$(grep -A1 '^  low:' "$ROUTING_RULES" | grep 'model:' | sed 's/.*model: *"\([^"]*\)".*/\1/' || echo "NOT SET")
+_MID_MODEL=$(grep -A1 '^  mid:' "$ROUTING_RULES" | grep 'model:' | sed 's/.*model: *"\([^"]*\)".*/\1/' || echo "NOT SET")
+_TOP_MODEL=$(grep -A1 '^  top:' "$ROUTING_RULES" | grep 'model:' | sed 's/.*model: *"\([^"]*\)".*/\1/' || echo "NOT SET")
+ok "Tier models: low=$_LOW_MODEL, mid=$_MID_MODEL, top=$_TOP_MODEL"
 
-# Verify tier models were set correctly
-if ! grep -q 'model: "gemini/gemini-3-flash-preview"' "$ROUTING_RULES"; then
-    warn "Failed to set low tier model in routing_rules.yaml"
-fi
-if ! grep -q 'model: "gemini/gemini-3-pro-preview"' "$ROUTING_RULES"; then
-    warn "Failed to set mid tier model in routing_rules.yaml"
-fi
-if ! grep -q 'model: "bedrock/us.anthropic.claude-opus-4-6-v1"' "$ROUTING_RULES"; then
-    warn "Failed to set top tier model in routing_rules.yaml"
-fi
-ok "Tier models: low=gemini-3-flash, mid=gemini-3-pro, top=opus-4-6"
+# ---------- 5c. Validate model configs (no auto-adding) ---------------------
+info "Validating model configurations..."
 
-# ---------- 5c. Add provider models to proxy_config.yaml --------------------
-info "Preparing provider model entries..."
-
-# Collect model entries to add, then insert them all at once before "auto".
-_NEW_MODELS_FILE=$(mktemp)
-if [ $? -ne 0 ] || [ -z "$_NEW_MODELS_FILE" ]; then
-    fail "Failed to create temporary file for model entries
-
-  Check that /tmp is writable and has sufficient space."
-fi
-trap 'rm -f "$_NEW_MODELS_FILE"' EXIT
-
-# Queue a model entry (written to temp file, inserted later in one pass).
-add_model() {
-    local model_name="$1" model_id="$2" api_key_env="$3"
-    # Skip if already in the config
-    if grep -q "model_name: $model_name" "$CONFIG_FILE" 2>/dev/null; then
-        return 0
-    fi
-    cat >> "$_NEW_MODELS_FILE" <<ENTRY
-
-  - model_name: $model_name
-    litellm_params:
-      model: $model_id
-      api_key: os.environ/$api_key_env
-ENTRY
-    if [ $? -ne 0 ]; then
-        warn "Failed to write model entry for $model_name to temporary file"
-        return 1
-    fi
-    return 0
-}
-
-# Read provider models from models.yaml and queue entries for available providers
-if [ ! -f "$MODELS_FILE" ]; then
-    warn "models.yaml not found at $MODELS_FILE, skipping provider model registration"
-    _PROVIDER_MODELS=""
-else
-    _PROVIDER_MODELS=$(MODELS_FILE="$MODELS_FILE" AVAILABLE="$AVAILABLE" python << 'PYEOF'
-import yaml, os, sys
-try:
-    providers = set(os.environ.get("AVAILABLE", "").split())
-    with open(os.environ["MODELS_FILE"]) as f:
-        cfg = yaml.safe_load(f)
-    for name, info in cfg.get("provider_models", {}).items():
-        if name in providers:
-            for m in info["models"]:
-                print(f'{m["name"]}|{m["id"]}|{info["key_env"]}')
-except Exception as e:
-    print(f"ERROR: {e}", file=sys.stderr)
-    sys.exit(1)
-PYEOF
-)
-    if [ $? -ne 0 ]; then
-        warn "Failed to parse models.yaml, skipping provider model registration. Error output above."
-        _PROVIDER_MODELS=""
-    fi
-fi
-
-if [ -n "$_PROVIDER_MODELS" ]; then
-    while IFS='|' read -r _mname _mid _mkey; do
-        add_model "$_mname" "$_mid" "$_mkey"
-    done <<< "$_PROVIDER_MODELS"
-fi
-
-# Flush queued models into proxy_config.yaml
-if [ -s "$_NEW_MODELS_FILE" ]; then
-    info "Adding queued models to proxy_config.yaml..."
-    # Convert empty YAML list to block-style so we can append entries
-    if grep -q 'model_list: \[\]' "$CONFIG_FILE"; then
-        sedi 's/model_list: \[\]/model_list:/' "$CONFIG_FILE"
-    fi
-
-    if grep -q '- model_name: auto' "$CONFIG_FILE"; then
-        # Insert before the "auto" entry
-        awk -v newfile="$_NEW_MODELS_FILE" '
-            /^  - model_name: auto$/ {
-                while ((getline line < newfile) > 0) print line
-                close(newfile)
-            }
-            { print }
-        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
-        if [ $? -ne 0 ]; then
-            fail "Failed to insert model entries into proxy_config.yaml using awk"
-        fi
-        mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-        if [ $? -ne 0 ]; then
-            fail "Failed to move temporary config file to $CONFIG_FILE"
-        fi
-    else
-        # No auto entry — append after "model_list:" line
-        awk -v newfile="$_NEW_MODELS_FILE" '
-            /^model_list:/ {
-                print
-                while ((getline line < newfile) > 0) print line
-                close(newfile)
-                next
-            }
-            { print }
-        ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
-        if [ $? -ne 0 ]; then
-            fail "Failed to append model entries to proxy_config.yaml using awk"
-        fi
-        mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-        if [ $? -ne 0 ]; then
-            fail "Failed to move temporary config file to $CONFIG_FILE"
-        fi
-    fi
-    ok "Added model(s) to proxy_config.yaml for configured providers"
-else
-    info "No new models to add to proxy_config.yaml"
-fi
-rm -f "$_NEW_MODELS_FILE"
-
-# Ensure the "auto" model entry exists (uses the auto-router)
+# Verify that essential models are configured in proxy_config.yaml
 if ! grep -q 'model_name: auto' "$CONFIG_FILE"; then
-    info "Adding auto-router entry to proxy_config.yaml..."
-    # Pick a default model: use the mid tier if set, otherwise first available provider model
-    AUTO_DEFAULT="${MID_MODEL:-${LOW_MODEL:-${TOP_MODEL:-}}}"
-    if [ -z "$AUTO_DEFAULT" ] && [ -n "$_PROVIDER_MODELS" ]; then
-        AUTO_DEFAULT=$(echo "$_PROVIDER_MODELS" | head -1 | cut -d'|' -f2)
-    fi
-    AUTO_DEFAULT="${AUTO_DEFAULT:-gemini/gemini-3-flash-preview}"
-
-    # Convert empty YAML list if not already done
-    if grep -q 'model_list: \[\]' "$CONFIG_FILE"; then
-        sedi 's/model_list: \[\]/model_list:/' "$CONFIG_FILE"
-    fi
-
-    # Append the auto entry at the end of model_list (before the next top-level key)
-    awk -v routing="$ROUTING_RULES" -v default_model="$AUTO_DEFAULT" '
-        /^model_list:/ { in_models=1 }
-        in_models && (/^[a-z]/ || /^#/) && !/^model_list:/ {
-            printf "\n  - model_name: auto\n"
-            printf "    litellm_params:\n"
-            printf "      model: \"auto_router/auto_router_1\"\n"
-            printf "      auto_router_config_path: \"%s\"\n", routing
-            printf "      auto_router_default_model: \"%s\"\n", default_model
-            printf "\n"
-            in_models=0
-        }
-        { print }
-    ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
-    if [ $? -ne 0 ]; then
-        fail "Failed to generate auto-router entry using awk"
-    fi
-    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
-    if [ $? -ne 0 ]; then
-        fail "Failed to move temporary config file to $CONFIG_FILE"
-    fi
-    ok "Added auto-router entry to proxy_config.yaml (default: $AUTO_DEFAULT)"
+    warn "No 'auto' model found in proxy_config.yaml - auto-router may not work"
 fi
+
+# Display configured tier models (already read in 5b)
+ok "Model configs validated (using existing configurations)"
 
 # ---------- 5d. Register litellm provider with OpenClaw ---------------------
 
