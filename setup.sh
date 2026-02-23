@@ -539,7 +539,7 @@ else
 
     # Set environment variables for direct mode
     export CLAWROUTER_ROUTING_RULES_PATH="$ROUTING_RULES"
-    export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-1234}"
+    export LITELLM_MASTER_KEY="sk-1234"
 
     info "Starting LiteLLM proxy server..."
     exec "$LITELLM_BIN" --config "$CONFIG_FILE" --port "$PROXY_PORT"
