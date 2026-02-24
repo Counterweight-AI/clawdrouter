@@ -1,4 +1,4 @@
-# ClawRouter
+# ClawdRouter
 
 Smart model routing for [OpenClaw](https://openclaw.ai). Routes your OpenClaw's requests to cheap, mid-range, or expensive models based on what you're doing so you stop burning credits on simple requests.
 
@@ -16,8 +16,8 @@ Why drive a Lamborgini to the grocery store when the Prius will do? ClawRouter c
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/Counterweight-AI/clawrouter.git --depth 1
-cd clawrouter
+git clone https://github.com/Counterweight-AI/clawdrouter.git --depth 1
+cd clawdrouter
 
 # 2. Install the plugin (link mode — points at your local copy)
 openclaw plugins install -l ./openclaw-plugin
