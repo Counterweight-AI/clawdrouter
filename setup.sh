@@ -318,7 +318,12 @@ if [ "$DOCKER_MODE" = true ]; then
         sedi '/^general_settings:/a\  database_url: "os.environ/DATABASE_URL"' "$CONFIG_FILE"
     fi
     # Use env var reference for master_key (so Docker compose can inject it)
-    sedi 's/master_key: sk-1234/master_key: os.environ\/LITELLM_MASTER_KEY/' "$CONFIG_FILE"
+    sedi '/^general_settings:/,/^[a-z]/{s/master_key: sk-1234/master_key: os.environ\/LITELLM_MASTER_KEY/}' "$CONFIG_FILE"
+    if ! awk '/^general_settings:/,/^[a-z]/' "$CONFIG_FILE" | grep -q 'master_key:'; then
+        sedi '/^general_settings:/a\  master_key: os.environ\/LITELLM_MASTER_KEY' "$CONFIG_FILE"
+    fi
+    # Ensure master_key is NOT under litellm_settings (belongs under general_settings)
+    sedi '/^litellm_settings:/,/^[a-z]/{/^  master_key:/d}' "$CONFIG_FILE"
     # Generate master key if not already in .env
     if ! grep -q 'LITELLM_MASTER_KEY=' "$ENV_FILE"; then
         GENERATED_KEY="sk-$(openssl rand -hex 16)"
@@ -332,7 +337,10 @@ else
     # Remove database_url when running in direct mode (no DB needed)
     sedi '/^  database_url:/d' "$CONFIG_FILE"
     # Revert master_key to literal for direct mode (no DB to look up virtual keys)
-    sedi 's|master_key: os.environ/LITELLM_MASTER_KEY|master_key: sk-1234|' "$CONFIG_FILE"
+    sedi '/^general_settings:/,/^[a-z]/{s|master_key: os.environ/LITELLM_MASTER_KEY|master_key: sk-1234|}' "$CONFIG_FILE"
+    if ! awk '/^general_settings:/,/^[a-z]/' "$CONFIG_FILE" | grep -q 'master_key:'; then
+        sedi '/^general_settings:/a\  master_key: sk-1234' "$CONFIG_FILE"
+    fi
     # Ensure store_model_in_db is false for direct mode
     sedi 's/store_model_in_db: true/store_model_in_db: false/' "$CONFIG_FILE"
 fi
