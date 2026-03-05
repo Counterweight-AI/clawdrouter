@@ -4,6 +4,7 @@
 services:
   litellm:
     image: clawrouter:local
+    restart: always
     ports:
       - "${CLAWROUTER_PORT:-4141}:4000" # Map host port (default 4141) to container port 4000
     volumes:
