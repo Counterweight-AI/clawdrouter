@@ -3,9 +3,9 @@
 # LiteLLM Proxy Setup Script
 #
 # Usage:
-#   ./setup.sh                      # Direct mode (no Docker), port 4141
-#   ./setup.sh --port 4242          # Direct mode on custom port
-#   ./setup.sh --docker             # Docker mode with per-user API keys, port 4141
+#   ./setup.sh                      # Direct mode (no Docker), port 4242
+#   ./setup.sh --port 4141          # Direct mode on custom port
+#   ./setup.sh --docker             # Docker mode with per-user API keys, port 4242
 #   ./setup.sh --docker --port 4343 # Docker mode on custom port
 #
 # This script:
@@ -14,7 +14,7 @@
 #   3. Installs LiteLLM with proxy support
 #   4. Patches the proxy config for the current machine
 #   5. Prompts for API keys and writes a .env file
-#   6. Starts the proxy on port 4141
+#   6. Starts the proxy on port 4242
 # =============================================================================
 #set -euo pipefail
 
@@ -38,7 +38,7 @@ MODELS_FILE="$REPO_ROOT/models.yaml"
 
 # ---------- CLI flags ----------------------------------------------------------
 DOCKER_MODE=false
-PROXY_PORT=4141
+PROXY_PORT=4242
 while [ $# -gt 0 ]; do
     case "$1" in
         --docker) DOCKER_MODE=true ;;
@@ -535,7 +535,7 @@ try:
     config["models"].setdefault("providers", {})
 
     config["models"]["providers"]["litellm"] = {
-        "baseUrl": f"http://127.0.0.1:{os.environ.get('PROXY_PORT', '4141')}/v1",
+        "baseUrl": f"http://127.0.0.1:{os.environ.get('PROXY_PORT', '4242')}/v1",
         "apiKey": "sk-1234",
         "api": "openai-completions",
         "models": [
